@@ -15,12 +15,15 @@ interface GenerateTattooModalProps {
 export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateTattooModalProps) {
   const { user } = useAuth();
   const [subjectMatter, setSubjectMatter] = useState('');
+  const [referenceImage, setReferenceImage] = useState<File | null>(null);
+  const [referenceImagePreview, setReferenceImagePreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [generatedDescription, setGeneratedDescription] = useState<string | null>(null);
   const [generatedPrompt, setGeneratedPrompt] = useState<string | null>(null);
+  const [generatedModel, setGeneratedModel] = useState<string | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
   const [needsHuggingFaceKey, setNeedsHuggingFaceKey] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
@@ -34,8 +37,65 @@ export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateT
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
       }
+      if (referenceImagePreview) {
+        URL.revokeObjectURL(referenceImagePreview);
+      }
     };
-  }, [blobUrl]);
+  }, [blobUrl, referenceImagePreview]);
+
+  // Handle reference image upload
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        setError('Please upload an image file');
+        return;
+      }
+      
+      // Validate file size (max 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setError('Image size must be less than 10MB');
+        return;
+      }
+
+      setReferenceImage(file);
+      setError('');
+      
+      // Create preview
+      const previewUrl = URL.createObjectURL(file);
+      setReferenceImagePreview(previewUrl);
+    }
+  };
+
+  // Remove reference image
+  const handleRemoveImage = () => {
+    if (referenceImagePreview) {
+      URL.revokeObjectURL(referenceImagePreview);
+    }
+    setReferenceImage(null);
+    setReferenceImagePreview(null);
+    // Reset file input
+    const fileInput = document.getElementById('referenceImage') as HTMLInputElement;
+    if (fileInput) {
+      fileInput.value = '';
+    }
+  };
+
+  // Convert image file to base64
+  const imageToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data URL prefix
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
 
   // Function to save generated tattoo to Firestore
   const saveGeneratedTattooToCollection = async (imageUrl: string, prompt: string) => {
@@ -89,22 +149,55 @@ export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateT
     setError('');
     setGeneratedImage(null);
     setGeneratedDescription(null);
+    setGeneratedModel(null);
     setNeedsHuggingFaceKey(false);
     setImageLoading(false);
 
     try {
+      // Convert reference image to base64 if provided
+      let referenceImageBase64: string | undefined;
+      let referenceImageMimeType: string | undefined;
+      
+      if (referenceImage) {
+        console.log('Converting reference image to base64...', {
+          fileName: referenceImage.name,
+          fileSize: referenceImage.size,
+          fileType: referenceImage.type,
+        });
+        referenceImageBase64 = await imageToBase64(referenceImage);
+        referenceImageMimeType = referenceImage.type;
+        console.log('Reference image converted:', {
+          base64Length: referenceImageBase64.length,
+          mimeType: referenceImageMimeType,
+          estimatedSizeKB: Math.round(referenceImageBase64.length * 3 / 4 / 1024),
+        });
+      } else {
+        console.log('No reference image provided - using text-to-image generation');
+      }
+
+      const requestBody = {
+        styles: filterSet.styles,
+        sizePreference: filterSet.sizePreference,
+        subjectMatter: subjectMatter.trim(),
+        colorPreference: filterSet.colorPreference,
+        bodyParts: filterSet.bodyParts,
+        referenceImage: referenceImageBase64,
+        referenceImageMimeType: referenceImageMimeType,
+      };
+
+      console.log('📤 Sending generation request:', {
+        hasReferenceImage: !!referenceImageBase64,
+        referenceImageSize: referenceImageBase64 ? `${Math.round(referenceImageBase64.length * 3 / 4 / 1024)}KB` : 'none',
+        subjectMatter: subjectMatter.trim(),
+        styles: filterSet.styles,
+      });
+
       const response = await fetch('/api/generate-tattoo', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          styles: filterSet.styles,
-          sizePreference: filterSet.sizePreference,
-          subjectMatter: subjectMatter.trim(),
-          colorPreference: filterSet.colorPreference,
-          bodyParts: filterSet.bodyParts,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const data = await response.json();
@@ -113,9 +206,12 @@ export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateT
         throw new Error(data.error || 'Failed to generate tattoo');
       }
 
-      // Store the prompt if provided
+      // Store the prompt and model if provided
       if (data.prompt) {
         setGeneratedPrompt(data.prompt);
+      }
+      if (data.model) {
+        setGeneratedModel(data.model);
       }
 
       // Check if we got an image
@@ -313,6 +409,88 @@ export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateT
           </p>
         </div>
 
+        {/* Reference Image Upload - Temporarily Removed */}
+        {/* 
+        <div className="mb-6">
+          <label htmlFor="referenceImage" className="block text-sm font-medium text-black/80 mb-2">
+            Reference Image (Optional)
+          </label>
+          {!referenceImagePreview ? (
+            <div className="border-2 border-dashed border-black/20 rounded-lg p-6 text-center hover:border-black/40 transition-colors">
+              <input
+                type="file"
+                id="referenceImage"
+                accept="image/*"
+                onChange={handleImageUpload}
+                disabled={loading}
+                className="hidden"
+              />
+              <label
+                htmlFor="referenceImage"
+                className="cursor-pointer flex flex-col items-center justify-center"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-12 w-12 text-black/40 mb-2"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"
+                  />
+                </svg>
+                <p className="text-sm text-black/60 mb-1">
+                  Click to upload a reference image
+                </p>
+                <p className="text-xs text-black/40">
+                  PNG, JPG, or WEBP up to 10MB
+                </p>
+              </label>
+            </div>
+          ) : (
+            <div className="relative border border-black/20 rounded-lg p-4 bg-black/5">
+              <img
+                src={referenceImagePreview}
+                alt="Reference preview"
+                className="w-full h-auto max-h-[300px] object-contain rounded"
+              />
+              <button
+                type="button"
+                onClick={handleRemoveImage}
+                disabled={loading}
+                className="absolute top-2 right-2 bg-black/80 text-white rounded-full p-2 hover:bg-black transition-colors min-h-[32px] min-w-[32px] flex items-center justify-center"
+                aria-label="Remove image"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+              <p className="mt-2 text-xs text-black/50 text-center">
+                {referenceImage?.name}
+              </p>
+            </div>
+          )}
+          <p className="mt-2 text-xs text-black/50">
+            Upload an image to use as a reference for the tattoo generation
+          </p>
+        </div>
+        */}
+
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 text-sm">
             {error}
@@ -329,7 +507,14 @@ export function GenerateTattooModal({ filterSet, onClose, onSuccess }: GenerateT
         {generatedImage && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-lg font-light text-black">Generated Design</h3>
+              <div>
+                <h3 className="text-lg font-light text-black">Generated Design</h3>
+                {generatedModel && (
+                  <p className="text-xs text-black/50 mt-1">
+                    Model: <span className="font-medium">{generatedModel}</span>
+                  </p>
+                )}
+              </div>
               {saving && (
                 <span className="text-xs text-black/50">Saving...</span>
               )}
