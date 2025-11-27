@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Simple email-based admin check.
+    // IMPORTANT: This is your admin email. Update here if you ever change it.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == "iyersamir@gmail.com";
+    }
+    
+    // Artists collection
+    match /artists/{artistId} {
+      allow read: if true; // Public read access for all users
+      // Users can create their own artist profile (userId must match their auth uid)
+      // Admins can also create artist profiles on behalf of others
+      allow create: if (request.auth != null && 
+                        request.resource.data.userId == request.auth.uid)
+                        || isAdmin();
+      // Users can update their own artist profile
+      // Admins can update any artist profile
+      allow update: if (request.auth != null && 
+                        resource.data.userId == request.auth.uid)
+                        || isAdmin();
+      // Admins can delete artist profiles
+      allow delete: if isAdmin();
+    }
+    
+    // Tattoos collection
+    match /tattoos/{tattooId} {
+      allow read: if true; // Public read access for all users
+      // Artists can create tattoos - verify they own the artist profile
+      // Admins can also create tattoos for any artist
+      allow create: if (request.auth != null && 
+                       request.resource.data.artistId != null &&
+                       exists(/databases/$(database)/documents/artists/$(request.resource.data.artistId)) &&
+                       get(/databases/$(database)/documents/artists/$(request.resource.data.artistId)).data.userId == request.auth.uid)
+                       || isAdmin();
+      // Artists can update their own tattoos
+      // Admins can update any tattoo
+      allow update: if (request.auth != null && 
+                       resource.data.artistId != null &&
+                       exists(/databases/$(database)/documents/artists/$(resource.data.artistId)) &&
+                       get(/databases/$(database)/documents/artists/$(resource.data.artistId)).data.userId == request.auth.uid)
+                       || isAdmin();
+      // Artists can delete their own tattoos
+      // Admins can delete any tattoo
+      allow delete: if (request.auth != null && 
+                       resource.data.artistId != null &&
+                       exists(/databases/$(database)/documents/artists/$(resource.data.artistId)) &&
+                       get(/databases/$(database)/documents/artists/$(resource.data.artistId)).data.userId == request.auth.uid)
+                       || isAdmin();
+    }
+    
+    // Likes collection - users can only read/write their own likes
+    match /likes/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // User preferences collection - users can only read/write their own preferences
+    match /user_preferences/{userId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Artist statistics (consultation requests, phone clicks, etc.)
+    match /artist_stats/{artistId} {
+      // Only admins can read aggregated stats in the admin interface
+      allow read: if isAdmin();
+      // Any user (even unauthenticated) can contribute interaction metrics
+      allow write: if true;
+    }
+    
+    // Inquiries collection
+    match /inquiries/{inquiryId} {
+      // Anyone can create inquiries (even unauthenticated users)
+      allow create: if request.resource.data.artistId != null && 
+                       request.resource.data.customerEmail != null;
+      // Artists can read their own inquiries
+      allow read: if request.auth != null && 
+                     resource.data.artistId != null &&
+                     exists(/databases/$(database)/documents/artists/$(resource.data.artistId)) &&
+                     get(/databases/$(database)/documents/artists/$(resource.data.artistId)).data.userId == request.auth.uid;
+      // Users can read their own inquiries (if they have a userId)
+      allow read: if request.auth != null && 
+                     resource.data.userId == request.auth.uid;
+      // Artists can update status of their inquiries
+      allow update: if request.auth != null && 
+                       resource.data.artistId != null &&
+                       exists(/databases/$(database)/documents/artists/$(resource.data.artistId)) &&
+                       get(/databases/$(database)/documents/artists/$(resource.data.artistId)).data.userId == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']);
+      allow delete: if false; // Disable deletion for now
+    }
+  }
+}
+

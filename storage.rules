@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Simple email-based admin check for Storage.
+    // IMPORTANT: This must match the admin email in `firestore.rules`.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == "iyersamir@gmail.com";
+    }
+
+    // Tattoo images - artists can upload to their own folder
+    match /tattoos/{userId}/{allPaths=**} {
+      // Anyone authenticated can read tattoo images
+      allow read: if request.auth != null;
+      // Users can only write (upload/delete) to their own folder,
+      // but admins can write to any folder.
+      allow write: if (request.auth != null && request.auth.uid == userId) || isAdmin();
+    }
+  }
+}
+
